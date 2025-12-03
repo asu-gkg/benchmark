@@ -49,11 +49,8 @@ def hadamard_hook_cuda(process_group, bucket):
 def setup_distributed_env(args):
     file_prefix = f"{args.comm}_{args.algo}_{args.model}_{args.epochs}_{args.batch_size}"
     os.environ['MASTER_PORT'] = '12355'
-    os.environ['GLOO_SOCKET_IFNAME'] = args.dev
-    os.environ['GLOO_ALGO'] = args.algo.capitalize()
-    os.environ['GLOO_DPDK_TIMEOUT'] = str(args.tr_timeout)
-    os.environ['GLOO_DPDK_THREADS_OFFSET'] = str(args.tr_threads_offset)
-    os.environ['GLOO_DPDK_FILE_PREFIX'] = file_prefix
+    if args.comm == 'nccl':
+        os.environ['NCCL_SOCKET_IFNAME'] = args.dev
     return file_prefix + ".log"
     
 def initialize_process_group(args):

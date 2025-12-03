@@ -9,14 +9,11 @@ def get_parser():
     parser.add_argument('--epochs', default=90, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-hd', '--hadamard', default=False, type=bool, help='Use hadamard transform? (default is False)')
-    parser.add_argument('-cm', '--comm', default="gloo", type=str, help='Distributed learning communication backend')
+    parser.add_argument('-cm', '--comm', default="nccl", type=str, help='Distributed learning communication backend')
     parser.add_argument('--model', default="vgg19", type=str, 
                         choices=["vgg19", "bert", "bart", "roberta", "gpt2"],
                         help="Model to train")
     parser.add_argument("--algo", default="Ring", type=str)
-    parser.add_argument("--tr_timeout", default=0, type=int)
-    parser.add_argument("--tr_threads_offset", default=0, type=int)
-    parser.add_argument("--tr_config", default="dpdk.cfg", type=str)
     parser.add_argument("--dev", required=True, help='NIC device to use')
     
     return parser

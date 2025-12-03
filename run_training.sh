@@ -1,10 +1,48 @@
 #!/bin/bash
 
+# Function to auto-detect network device by IP address
+auto_detect_device() {
+    local target_ip=$1
+    local device=""
+    
+    # Try to find device by IP address
+    if [ -n "$target_ip" ]; then
+        # Priority 1: Check if any interface directly has this IP (exclude lo)
+        device=$(ip -o addr show | grep -E "inet $target_ip/" | awk '{print $2}' | grep -v "^lo$" | head -1)
+        
+        # Priority 2: Get the network interface from route table (exclude lo)
+        if [ -z "$device" ]; then
+            device=$(ip route get "$target_ip" 2>/dev/null | grep -oP 'dev \K\S+' | grep -v "^lo$" | head -1)
+        fi
+        
+        # Priority 3: Find interface with IP in same subnet (exclude lo)
+        if [ -z "$device" ]; then
+            # Extract subnet (first 3 octets)
+            local subnet=$(echo "$target_ip" | cut -d. -f1-3)
+            device=$(ip -o addr show | grep -E "inet $subnet\." | awk '{print $2}' | grep -v "^lo$" | head -1)
+        fi
+        
+        # Priority 4: Try to find any active interface from default route (exclude lo)
+        if [ -z "$device" ]; then
+            device=$(ip route | grep default | awk '{print $5}' | grep -v "^lo$" | head -1)
+        fi
+        
+        # Priority 5: Find any non-lo interface with an IP address
+        if [ -z "$device" ]; then
+            device=$(ip -o addr show | awk '{print $2}' | grep -v "^lo$" | grep -v "^$" | head -1)
+        fi
+    fi
+    
+    echo "$device"
+}
+
 # Check if all required arguments are provided
-if [ -z "$5" ]; then
-    echo "Usage: $0 <MASTER_ADDR> <RANK> <NODES> <DEV> <MODEL>"
+if [ -z "$4" ]; then
+    echo "Usage: $0 <MASTER_ADDR> <RANK> <NODES> <MODEL> [DEV]"
     echo "Available models: vgg19, bert, bart, roberta, gpt2"
     echo "Set RUN_ALL=1 to run all communication schemes"
+    echo ""
+    echo "Note: DEV is optional. If not specified, it will be auto-detected based on MASTER_ADDR"
     exit 1
 fi
 
@@ -12,10 +50,36 @@ fi
 export MASTER_ADDR=$1
 export RANK=$2
 export NODES=$3
-export DEV=$4
-export MODEL=$5
+export MODEL=$4
+export DEV=${5:-""}  # Optional, will be auto-detected if not provided
 export CUBLAS_WORKSPACE_CONFIG=:16:8
 export RUN_ALL=${RUN_ALL:-0}  # Default to 0 if not set
+
+# Auto-detect network device if not specified
+if [ -z "$DEV" ]; then
+    echo "Auto-detecting network device based on MASTER_ADDR ($MASTER_ADDR)..."
+    DEV=$(auto_detect_device "$MASTER_ADDR")
+    
+    if [ -z "$DEV" ]; then
+        echo "Warning: Could not auto-detect network device. Trying common names..."
+        # Try common device names
+        for dev in enp6s27f0np0 ens17 eno1 eth0 mlx5_0; do
+            if ip link show "$dev" &>/dev/null; then
+                DEV="$dev"
+                echo "Found device: $DEV"
+                break
+            fi
+        done
+        
+        if [ -z "$DEV" ]; then
+            echo "Error: Could not auto-detect network device. Please specify it manually."
+            echo "Usage: $0 <MASTER_ADDR> <RANK> <NODES> <MODEL> <DEV>"
+            exit 1
+        fi
+    else
+        echo "Auto-detected device: $DEV"
+    fi
+fi
 
 # Print the environment variables
 echo "Environment variables set:"
@@ -32,33 +96,40 @@ case $MODEL in
     vgg19)
         BATCH_SIZE=128
         EPOCHS=150
-        TR_TIMEOUT=135
         ;;
     bert)
         BATCH_SIZE=16
         EPOCHS=5
-        TR_TIMEOUT=350
         ;;
     roberta)
         BATCH_SIZE=16
         EPOCHS=5
-        TR_TIMEOUT=370
         ;;
     bart)
         BATCH_SIZE=8
         EPOCHS=6
-        TR_TIMEOUT=370
         ;;
     gpt2)
         BATCH_SIZE=8
         EPOCHS=6
-        TR_TIMEOUT=370
         ;;
     *)
         echo "Invalid model specified. Available models: vgg19, bert, bart, roberta, gpt2"
         exit 1
         ;;
 esac
+
+# Clean up any existing processes using the port or running training
+echo "Cleaning up any existing processes..."
+MASTER_PORT=12355
+# Kill processes using the master port
+if command -v lsof &> /dev/null; then
+    lsof -ti:$MASTER_PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
+fi
+# Kill any existing training processes
+pkill -f "examples/train.py" 2>/dev/null || true
+# Wait a moment for processes to terminate
+sleep 2
 
 # Construct the base command
 BASE_COMMAND="python examples/train.py --nr $RANK --nodes $NODES --model $MODEL --epochs $EPOCHS --batch_size $BATCH_SIZE --dev $DEV"
@@ -75,20 +146,6 @@ if [ "$RUN_ALL" = "1" ]; then
 
     NCCL_IB_DISABLE=1 $BASE_COMMAND --algo tree --comm nccl
     sleep 5
-
-    # Gloo schemes
-    $BASE_COMMAND --algo ring
-    sleep 5
-
-    $BASE_COMMAND --algo bcube
-    sleep 5
-
-    $BASE_COMMAND --algo transpose
-    sleep 5
 fi
-
-# Always run OptiReduce
-echo "Running OptiReduce..."
-taskset -c 1-8 $BASE_COMMAND --algo optireduce --tr_timeout $TR_TIMEOUT --tr_threads_offset 11
 
 echo "All commands executed."

@@ -40,8 +40,6 @@ def train(args, file_prefix):
     model.to(device)
 
     # Distributed Data Parallel setup
-    if args.model == "gpt2":
-        model._ddp_params_and_buffers_to_ignore = [name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool] # This is the trick, you ask DDP to ignore all buffers that are in torch.bool because GLOO doesn't support bool.
     model = DDP(model, bucket_cap_mb=1350)
     
     # Hadamard transform setup
