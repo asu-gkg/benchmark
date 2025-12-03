@@ -2,23 +2,9 @@
 
 本指南介绍如何使用 OptiReduce 在不同网络条件下运行基准测试，通过受控的背景流量来模拟各种网络环境。
 
-**注意**：如果您已经使用 ansible 仓库中的 `make optireduce-full` 设置了环境，可以直接跳转到[运行训练](#运行训练)部分。
-
 ## 安装选项
 
-### 选项 1：使用 Ansible（推荐）
-
-使用我们的 Ansible playbooks 安装基准测试是最简单的方法：
-
-```bash
-git clone https://github.com/OptiReduce/ansible.git
-cd ansible
-make benchmark-only
-```
-
-有关使用 Ansible 部署的详细说明，请访问我们的 [Ansible 文档](http://optireduce.github.io/ansible)。
-
-### 选项 2：使用基准测试仓库
+### 选项 1：使用基准测试仓库
 
 我们在基准测试仓库中提供了自动化安装脚本：
 
@@ -31,15 +17,6 @@ cd benchmark
 make install
 ```
 
-### 选项 3：手动安装
-
-如果您更喜欢手动安装，请按照以下步骤操作：
-
-1. 安装 Redis 服务器：
-```bash
-sudo apt update
-sudo apt install redis-server
-```
 
 
 ## 背景流量设置
@@ -211,8 +188,6 @@ esac
 对于与部署相关的问题：
 1. 详细查看安装日志
 2. 在 github 仓库中提交问题
-
-对于一般的 OptiReduce 问题和用法，请参阅我们的[官方文档](http://optireduce.github.io/)。
 
 ## 许可证
 
