@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import torch.nn as nn
@@ -77,7 +78,13 @@ def train(args, file_prefix):
         train_acc = 0.0
         epoch_start = pc()
         
-        for batch in tqdm(train_loader):
+        # 只在 rank 0 显示进度条，避免多进程输出混乱
+        if dist.get_rank() == 0:
+            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", ncols=100)
+        else:
+            pbar = train_loader
+        
+        for batch in pbar:
             # Zero gradients at the beginning of each iteration
             optimizer.zero_grad()
             
@@ -157,7 +164,16 @@ def train(args, file_prefix):
         if args.model not in ["gpt2", "bart"]:
             scheduler.step()
             
-        print(f"Epoch {epoch+1}:\nEpoch Time: {epoch_time:.3f}s Train Loss: {train_loss:.3f}, Accuracy: {train_acc:.3f}")
+        # 只在 rank 0 打印 epoch 信息，避免重复输出
+        if dist.get_rank() == 0:
+            if isinstance(pbar, tqdm):
+                pbar.close()
+            print(f"\nEpoch {epoch+1}/{args.epochs} completed:")
+            print(f"  Time: {epoch_time:.3f}s")
+            print(f"  Loss: {train_loss:.3f}")
+            print(f"  Accuracy: {train_acc:.3f}")
+        
+        # 所有 rank 都记录指标（用于日志文件）
         log_training_metrics(epoch_times, epoch_acc, epoch_loss, file_prefix)
     
     return model
@@ -165,13 +181,28 @@ def train(args, file_prefix):
 def main():
     parser = get_parser()
     args = parser.parse_args()
+    
+    # Print debug info
+    print(f"[Rank {args.nr}] Starting training...")
+    print(f"[Rank {args.nr}] MASTER_ADDR: {os.environ.get('MASTER_ADDR', 'NOT SET')}")
+    print(f"[Rank {args.nr}] MASTER_PORT: {os.environ.get('MASTER_PORT', 'NOT SET')}")
+    print(f"[Rank {args.nr}] World size: {args.nodes}, Rank: {args.nr}")
+    
     file_path = setup_distributed_env(args)
-    initialize_process_group(args)
+    
+    print(f"[Rank {args.nr}] Initializing process group...")
+    try:
+        initialize_process_group(args)
+        print(f"[Rank {args.nr}] Process group initialized successfully!")
+    except Exception as e:
+        print(f"[Rank {args.nr}] Failed to initialize process group: {e}")
+        raise
+    
     start_time = datetime.now()
     train(args, file_path)
     end_time = datetime.now()
     dist.destroy_process_group()
-    print(f"Training completed in {end_time - start_time}. Log files saved as {file_path}")
+    print(f"[Rank {args.nr}] Training completed in {end_time - start_time}. Log files saved as {file_path}")
 
 if __name__ == '__main__':
     main()

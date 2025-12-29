@@ -41,6 +41,7 @@ if [ -z "$4" ]; then
     echo "Usage: $0 <MASTER_ADDR> <RANK> <NODES> <MODEL> [DEV]"
     echo "Available models: vgg19, bert, bart, roberta, gpt2"
     echo "Set RUN_ALL=1 to run all communication schemes"
+    echo "Set USE_HADAMARD=1 to use Hadamard transform"
     echo ""
     echo "Note: DEV is optional. If not specified, it will be auto-detected based on MASTER_ADDR"
     exit 1
@@ -54,6 +55,8 @@ export MODEL=$4
 export DEV=${5:-""}  # Optional, will be auto-detected if not provided
 export CUBLAS_WORKSPACE_CONFIG=:16:8
 export RUN_ALL=${RUN_ALL:-0}  # Default to 0 if not set
+export USE_HADAMARD=${USE_HADAMARD:-0}  # Default to 0 (don't use hadamard)
+export MASTER_PORT=${MASTER_PORT:-12355}  # Default master port
 
 # Auto-detect network device if not specified
 if [ -z "$DEV" ]; then
@@ -90,6 +93,8 @@ echo "NODES=$NODES"
 echo "DEV=$DEV"
 echo "MODEL=$MODEL"
 echo "RUN_ALL=$RUN_ALL"
+echo "USE_HADAMARD=$USE_HADAMARD"
+echo "MASTER_PORT=$MASTER_PORT"
 
 # Assign variables based on the model
 case $MODEL in
@@ -131,20 +136,61 @@ pkill -f "examples/train.py" 2>/dev/null || true
 # Wait a moment for processes to terminate
 sleep 2
 
+# Set LD_LIBRARY_PATH for hadamard_cuda if needed
+if [ "$USE_HADAMARD" = "1" ]; then
+    TORCH_LIB_PATH="/home/asu/Desktop/benchmark/.venv/lib/python3.12/site-packages/torch/lib"
+    if [ -d "$TORCH_LIB_PATH" ]; then
+        export LD_LIBRARY_PATH="$TORCH_LIB_PATH:${LD_LIBRARY_PATH:-}"
+        echo "Set LD_LIBRARY_PATH for hadamard_cuda: $TORCH_LIB_PATH"
+    fi
+fi
+
+# Find Python executable (prefer venv, then python3, then python)
+PYTHON_CMD=""
+if [ -f ".venv/bin/python" ]; then
+    PYTHON_CMD=".venv/bin/python"
+elif command -v python3 &> /dev/null; then
+    PYTHON_CMD="python3"
+elif command -v python &> /dev/null; then
+    PYTHON_CMD="python"
+else
+    echo "Error: Python not found!"
+    exit 1
+fi
+
 # Construct the base command
-BASE_COMMAND="python examples/train.py --nr $RANK --nodes $NODES --model $MODEL --epochs $EPOCHS --batch_size $BATCH_SIZE --dev $DEV"
+HADAMARD_FLAG=""
+if [ "$USE_HADAMARD" = "1" ]; then
+    HADAMARD_FLAG="--hadamard True"
+fi
+BASE_COMMAND="$PYTHON_CMD examples/train.py --nr $RANK --nodes $NODES --model $MODEL --epochs $EPOCHS --batch_size $BATCH_SIZE --dev $DEV $HADAMARD_FLAG"
 
 echo "Executing commands..."
+echo "Python command: $PYTHON_CMD"
+echo "Base command: $BASE_COMMAND"
+echo ""
 
 # Run all communication schemes if RUN_ALL is set
 if [ "$RUN_ALL" = "1" ]; then
     echo "Running all communication schemes..."
+    echo "Waiting for all nodes to connect (this may take a moment)..."
+    echo ""
 
     # NCCL schemes
+    echo "=== Starting NCCL Ring algorithm ==="
     NCCL_IB_DISABLE=1 $BASE_COMMAND --algo ring --comm nccl
+    exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo "Warning: NCCL Ring failed with exit code $exit_code"
+    fi
     sleep 5
 
+    echo "=== Starting NCCL Tree algorithm ==="
     NCCL_IB_DISABLE=1 $BASE_COMMAND --algo tree --comm nccl
+    exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo "Warning: NCCL Tree failed with exit code $exit_code"
+    fi
     sleep 5
 fi
 
